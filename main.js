@@ -12,6 +12,18 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
+// ---------------------------------------------------------------------------
+// Loader: the build is split into steps so the progress bar can repaint
+// ---------------------------------------------------------------------------
+const loaderEl = document.getElementById("loader");
+const loaderFill = document.getElementById("loader-fill");
+const loaderStatus = document.getElementById("loader-status");
+async function loadStep(frac, msg) {
+  loaderFill.style.transform = `scaleX(${frac})`;
+  loaderStatus.textContent = msg + "…";
+  await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+}
+
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.3, 12000);
 
@@ -20,8 +32,17 @@ const FOG_FAR = 1500;
 // land haze matches the sky's horizon colour on the side away from the sun
 scene.fog = new THREE.Fog(new THREE.Color().setRGB(0.62, 0.42, 0.55, THREE.SRGBColorSpace), 260, 3600);
 
-// The sun sits low over the ocean (+z), half sunk into the horizon.
-const SUN_DIR = new THREE.Vector3(-0.25, 0.02, 1).normalize();
+// One drone loop = one sunset: the sun sinks from ~7° above the horizon to ~3° below it.
+const LOOP_SECONDS = 80;
+const SUN_START_DEG = 7;
+const SUN_END_DEG = -3;
+const SUN_AZIMUTH = new THREE.Vector2(-0.25, 1).normalize(); // low over the ocean (+z)
+const SUN_DIR = new THREE.Vector3();
+function setSunElevation(deg) {
+  const e = deg * Math.PI / 180;
+  SUN_DIR.set(SUN_AZIMUTH.x * Math.cos(e), Math.sin(e), SUN_AZIMUTH.y * Math.cos(e));
+}
+setSunElevation(SUN_START_DEG);
 
 // Region covered by the dense, fully-animated wave mesh.
 const NEAR_CENTER_Z = 120;
@@ -144,24 +165,43 @@ const GLSL_COMMON = /* glsl */ `
   // slow tide that laps the water up and down the beach
   float washLevel(float t) { return sin(t * 0.55) * 0.22 + sin(t * 0.31 + 1.0) * 0.10; }
 
+  float dayAmt() { return smoothstep(-0.07, 0.09, uSunDir.y); }   // overall sky brightness
+  float sunVis() { return smoothstep(-0.035, 0.015, uSunDir.y); } // disc above the horizon
+
   vec3 skyColor(vec3 d, bool clouds) {
     float h = d.y;
+    float sunH = uSunDir.y;
+    float day = dayAmt();
+    float vis = sunVis();
     vec2 dh = normalize(d.xz + 1e-5);
     vec2 sh = normalize(uSunDir.xz);
     float side = dot(dh, sh) * 0.5 + 0.5;          // 1 = facing the sun
 
-    vec3 horizon = mix(vec3(0.62, 0.40, 0.55), vec3(1.00, 0.52, 0.22), pow(side, 1.5));
-    vec3 mid     = mix(vec3(0.34, 0.26, 0.50), vec3(0.90, 0.36, 0.34), pow(side, 2.0));
-    vec3 zenith  = vec3(0.09, 0.09, 0.25);
+    // golden horizon while the sun is up, deep orange as it sinks, an ember afterglow after
+    vec3 hSun = mix(vec3(0.85, 0.30, 0.14), vec3(1.0, 0.60, 0.30), smoothstep(0.0, 0.12, sunH)) * mix(0.55, 1.0, day);
+    vec3 hAway = mix(vec3(0.30, 0.26, 0.40), vec3(0.62, 0.40, 0.55), day);
+    vec3 horizon = mix(hAway, hSun, pow(side, 1.5));
+    vec3 mSun = mix(vec3(0.55, 0.24, 0.32), vec3(0.90, 0.40, 0.34), day);
+    vec3 mAway = mix(vec3(0.20, 0.18, 0.36), vec3(0.34, 0.26, 0.50), day);
+    vec3 mid = mix(mAway, mSun, pow(side, 2.0));
+    vec3 zenith = mix(vec3(0.04, 0.05, 0.15), vec3(0.09, 0.09, 0.25), day);
 
     float hp = max(h, 0.0);
     vec3 col = mix(horizon, mid, smoothstep(0.0, 0.18, hp));
     col = mix(col, zenith, smoothstep(0.10, 0.75, hp));
 
+    // opposite the sun: the pink Belt of Venus above the blue-grey shadow of the Earth
+    float anti = pow(1.0 - side, 2.0) * (1.0 - smoothstep(0.02, 0.10, sunH));
+    float belt = smoothstep(0.02, 0.07, hp) * (1.0 - smoothstep(0.10, 0.22, hp));
+    float earthShadow = 1.0 - smoothstep(0.0, 0.01 + 0.06 * (1.0 - day), hp);
+    col = mix(col, vec3(0.78, 0.52, 0.62) * mix(0.7, 1.0, day), belt * anti * 0.35);
+    col = mix(col, vec3(0.22, 0.22, 0.36), earthShadow * anti * (1.0 - day) * 0.6);
+
+    // the original soft, diffused orange sun — it just sinks, and its glow fades after it sets
     float sd = max(dot(d, uSunDir), 0.0);
-    col += vec3(1.0, 0.45, 0.15) * pow(sd, 6.0) * 0.45;
-    col += vec3(1.0, 0.70, 0.35) * pow(sd, 60.0) * 0.6;
-    col += vec3(1.0, 0.85, 0.55) * pow(sd, 900.0) * 1.0;
+    col += vec3(1.0, 0.45, 0.15) * pow(sd, 6.0) * 0.45 * mix(0.35, 1.0, vis);
+    col += vec3(1.0, 0.70, 0.35) * pow(sd, 60.0) * 0.6 * vis;
+    col += vec3(1.0, 0.85, 0.55) * pow(sd, 900.0) * 1.0 * vis;
     float disc = smoothstep(0.99955, 0.99968, sd);
     col = mix(col, vec3(1.0, 0.86, 0.6) * 1.3, disc);
 
@@ -170,10 +210,12 @@ const GLSL_COMMON = /* glsl */ `
       float n = fbm(vec2(uv.x * 0.6, uv.y * 1.8) + vec2(uTime * 0.006, 0.0));
       float dens = smoothstep(0.5, 0.78, n) * smoothstep(0.0, 0.05, h) * (1.0 - smoothstep(0.35, 0.75, h));
       vec3 cl = mix(vec3(0.40, 0.25, 0.42), vec3(1.0, 0.52, 0.34), pow(side, 2.0));
-      cl += vec3(1.0, 0.62, 0.3) * pow(sd, 10.0) * 0.9;
+      cl = mix(cl * vec3(0.5, 0.42, 0.62), cl, day);          // clouds dim and cool after sunset
+      cl += vec3(1.0, 0.62, 0.3) * pow(sd, 10.0) * 0.9 * vis;
       cl *= mix(1.0, 0.72, smoothstep(0.66, 0.9, n));
       col = mix(col, cl, dens * 0.85);
     }
+
     if (h < 0.0) col = mix(col, horizon * 0.55, smoothstep(0.0, -0.1, h));
     return col;
   }
@@ -183,6 +225,8 @@ const sharedUniforms = {
   uTime: { value: 0 },
   uSunDir: { value: SUN_DIR },
 };
+
+await loadStep(0.12, "Painting the sky");
 
 // ---------------------------------------------------------------------------
 // Sky dome (+ a blurred copy of it as the environment for reflections)
@@ -221,7 +265,8 @@ scene.add(sky);
 // ---------------------------------------------------------------------------
 // Lights
 // ---------------------------------------------------------------------------
-scene.add(new THREE.HemisphereLight(0xa8a4cc, 0x55504a, 0.8));
+const hemi = new THREE.HemisphereLight(0xa8a4cc, 0x55504a, 0.8);
+scene.add(hemi);
 
 const sunLight = new THREE.DirectionalLight(0xffc08a, 2.6);
 const lightDir = new THREE.Vector3(SUN_DIR.x, 0.22, SUN_DIR.z).normalize();
@@ -233,6 +278,36 @@ Object.assign(sunLight.shadow.camera, { left: -120, right: 120, top: 90, bottom:
 sunLight.shadow.bias = -0.0005;
 sunLight.shadow.normalBias = 0.05;
 scene.add(sunLight, sunLight.target);
+
+// ---------------------------------------------------------------------------
+// Sunset over the loop: sun position, light, haze and reflections follow it
+// ---------------------------------------------------------------------------
+const lightHigh = srgb(1.0, 0.75, 0.54);
+const lightLow = srgb(1.0, 0.45, 0.22);
+const hemiSkyDay = new THREE.Color(0xa8a4cc), hemiSkyDusk = new THREE.Color(0x5a5a8a);
+const fogDay = srgb(0.62, 0.40, 0.55), fogDusk = srgb(0.30, 0.26, 0.40);
+const envMaterials = []; // filled once the scene is built: [material, baseIntensity]
+
+function updateSun(t) {
+  const p = (((t % LOOP_SECONDS) + LOOP_SECONDS) % LOOP_SECONDS) / LOOP_SECONDS;
+  setSunElevation(THREE.MathUtils.lerp(SUN_START_DEG, SUN_END_DEG, p));
+  const y = SUN_DIR.y;
+  const day = smoothstep(-0.07, 0.09, y); // same curves as dayAmt()/sunVis() in GLSL
+
+  sunLight.intensity = 2.8 * smoothstep(-0.035, 0.05, y);
+  sunLight.color.copy(lightLow).lerp(lightHigh, smoothstep(0, 0.12, y));
+  lightDir.set(SUN_DIR.x, Math.min(Math.max(y * 1.5 + 0.1, 0.06), 0.3), SUN_DIR.z).normalize();
+  sunLight.position.copy(lightDir).multiplyScalar(220).add(sunLight.target.position);
+
+  hemi.intensity = 0.3 + 0.5 * day;
+  hemi.color.copy(hemiSkyDusk).lerp(hemiSkyDay, day);
+  scene.fog.color.copy(fogDusk).lerp(fogDay, day);
+  const env = 0.35 + 0.65 * day;
+  for (const [m, base] of envMaterials) m.envMapIntensity = base * env;
+  return p;
+}
+
+await loadStep(0.22, "Shaping the dunes");
 
 // ---------------------------------------------------------------------------
 // Terrain: beach, dunes, cliffs, grassland and the ridge behind.
@@ -435,6 +510,8 @@ scene.add(sunLight, sunLight.target);
   terrain.receiveShadow = true;
   scene.add(terrain);
 }
+
+await loadStep(0.5, "Raising the tide");
 
 // ---------------------------------------------------------------------------
 // Ocean
@@ -649,14 +726,15 @@ function makeOceanMaterial(isNear) {
         // light glowing through the back of waves when looking toward the sun
         float toSun = max(dot(normalize(-V.xz + 1e-5), normalize(uSunDir.xz)), 0.0);
         float thick = clamp(vHeight * 0.9 + crest * 0.4 * a + br.x * 0.8, 0.0, 1.0);
-        body += vec3(0.20, 0.42, 0.34) * pow(toSun, 3.0) * thick * 0.9;
-        body += vec3(0.30, 0.12, 0.05) * pow(toSun, 4.0) * 0.5;
+        float day = dayAmt();
+        body += vec3(0.20, 0.42, 0.34) * pow(toSun, 3.0) * thick * 0.9 * day;
+        body += vec3(0.30, 0.12, 0.05) * pow(toSun, 4.0) * 0.5 * day;
 
         vec3 col = mix(body, refl, fres);
 
         // --- sun glitter
         float sd = max(dot(R, uSunDir), 0.0);
-        col += vec3(1.0, 0.72, 0.42) * (pow(sd, 600.0) * 9.0 + pow(sd, 120.0) * 1.2 + pow(sd, 25.0) * 0.25);
+        col += vec3(1.0, 0.72, 0.42) * sunVis() * (pow(sd, 600.0) * 9.0 + pow(sd, 120.0) * 1.2 + pow(sd, 25.0) * 0.25);
 
         // --- foam
         vec2 flow = vec2(0.0, -t * 0.6);
@@ -675,7 +753,7 @@ function makeOceanMaterial(isNear) {
         float foam = smoothstep(1.0 - amount, 1.0 - amount + 0.3, tex) * amount;
         foam = max(foam, smoothstep(0.75, 1.0, amount) * 0.85);
 
-        vec3 foamCol = vec3(1.0, 0.88, 0.80) * (0.62 + 0.38 * max(dot(N, normalize(uSunDir + vec3(0.0, 0.35, 0.0))), 0.0));
+        vec3 foamCol = vec3(1.0, 0.88, 0.80) * (0.62 + 0.38 * max(dot(N, normalize(uSunDir + vec3(0.0, 0.35, 0.0))), 0.0)) * mix(0.45, 1.0, day);
         col = mix(col, foamCol, foam);
 
         float alpha = mix(0.28, 1.0, smoothstep(0.0, 1.1, depth));
@@ -733,6 +811,8 @@ const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
     scene.add(rock);
   }
 }
+
+await loadStep(0.6, "Planting beachgrass");
 
 // ---------------------------------------------------------------------------
 // Dune plants: European beachgrass tufts + ice plant mats (Limantour style)
@@ -1007,6 +1087,8 @@ function addWind(material, strength) {
   }
 }
 
+await loadStep(0.75, "Growing the forest");
+
 // ---------------------------------------------------------------------------
 // Trees: Douglas fir / bishop pine forest on the ridge, windswept cypress
 // behind the dunes
@@ -1143,7 +1225,6 @@ const birds = [];
 // ---------------------------------------------------------------------------
 // Drone camera path
 // ---------------------------------------------------------------------------
-const LOOP_SECONDS = 80;
 const ORBIT_CENTER = new THREE.Vector3(0, 0, -4);
 const START = -Math.PI / 2 + 0.35; // begin over the beach, looking at the sunset
 const lookTarget = new THREE.Vector3();
@@ -1203,10 +1284,16 @@ const clock = new THREE.Clock();
 // ?t=SECONDS jumps to a point in the drone loop
 const T0 = parseFloat(new URLSearchParams(location.search).get("t")) || 0;
 const sceneTime = () => clock.getElapsedTime() + T0;
+const fadeEl = document.getElementById("fade");
 
 function animate() {
   const t = sceneTime();
   sharedUniforms.uTime.value = t;
+
+  // sunset progress; fade through dusk as the loop wraps back to the start
+  const p = updateSun(t);
+  const ls = p * LOOP_SECONDS;
+  fadeEl.style.opacity = Math.max(smoothstep(LOOP_SECONDS - 3, LOOP_SECONDS, ls), 1 - smoothstep(0, 2.5, ls)).toFixed(3);
 
   const a = dronePose(t, camera.position, lookTarget);
   camera.lookAt(lookTarget);
@@ -1236,4 +1323,19 @@ window.addEventListener("resize", () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+await loadStep(0.9, "Warming up shaders");
+scene.traverse((o) => {
+  const m = o.material;
+  if (m && m.envMapIntensity !== undefined && !envMaterials.some(([e]) => e === m)) envMaterials.push([m, m.envMapIntensity]);
+});
+updateSun(sceneTime());
+dronePose(sceneTime(), camera.position, lookTarget);
+camera.lookAt(lookTarget);
+renderer.compile(scene, camera);
+await loadStep(1, "Ready");
+
 animate();
+requestAnimationFrame(() => requestAnimationFrame(() => {
+  loaderEl.classList.add("done");
+  setTimeout(() => loaderEl.remove(), 1400);
+}));

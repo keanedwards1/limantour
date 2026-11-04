@@ -55,6 +55,97 @@ html, body {
 .sound.on .waves { display: inline; }
 .sound.on .cross { display: none; }
 
+/* ---------- loop-restart fade ---------- */
+.fade {
+  position: fixed;
+  inset: 0;
+  background: #0c0812;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---------- loader ---------- */
+.loader {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: linear-gradient(180deg, #120b22 0%, #2c1838 40%, #6a2c44 72%, #b8553c 100%);
+  color: #f6e6da;
+  font-family: system-ui, -apple-system, sans-serif;
+  transition: opacity 1.2s ease;
+}
+.loader.done { opacity: 0; pointer-events: none; }
+
+.loader-scene {
+  position: relative;
+  width: 120px;
+  height: 64px;
+  overflow: hidden;
+}
+.loader-sun {
+  position: absolute;
+  left: 50%;
+  top: 4px;
+  width: 64px;
+  height: 64px;
+  margin-left: -32px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 222, 170, 0.95) 0%, rgba(255, 160, 80, 0.7) 28%, rgba(240, 100, 50, 0.3) 55%, rgba(240, 100, 50, 0) 72%);
+  filter: blur(2px);
+  animation: sink 3.2s ease-in-out infinite alternate;
+}
+.loader-sea {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 22px;
+  background: linear-gradient(180deg, #3a2240, #1a1028);
+  border-top: 1px solid rgba(255, 170, 110, 0.6);
+}
+@keyframes sink {
+  from { transform: translateY(0); }
+  to { transform: translateY(26px); }
+}
+
+.loader-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+  padding-left: 0.42em;
+}
+.loader-bar {
+  width: 160px;
+  height: 2px;
+  background: rgba(255, 230, 210, 0.18);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.loader-bar span {
+  display: block;
+  height: 100%;
+  background: #ffc58a;
+  transform: scaleX(0.04);
+  transform-origin: left;
+  transition: transform 0.4s ease;
+}
+.loader-status {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.7;
+  letter-spacing: 0.04em;
+}
+@media (prefers-reduced-motion: reduce) {
+  .loader-sun { animation: none; }
+}
+
 .vignette {
   position: fixed;
   inset: 0;

@@ -17,6 +17,17 @@
 <body>
   <canvas id="scene"></canvas>
   <div class="vignette"></div>
+  <div class="fade" id="fade"></div>
+
+  <div class="loader" id="loader" role="status" aria-live="polite">
+    <div class="loader-scene" aria-hidden="true">
+      <div class="loader-sun"></div>
+      <div class="loader-sea"></div>
+    </div>
+    <p class="loader-title">Limantour</p>
+    <div class="loader-bar"><span id="loader-fill"></span></div>
+    <p class="loader-status" id="loader-status">Loading…</p>
+  </div>
 
   <div class="prompt" id="prompt">Click anywhere for sound</div>
   <button class="sound" id="sound" aria-label="Toggle sound (M)" title="Toggle sound (M)">
